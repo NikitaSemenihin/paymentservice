@@ -7,7 +7,7 @@ spring:
 
   data:
     mongodb:
-      uri: mongodb://localhost:27017/paymentservice
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://localhost:27017/paymentservice}
   kafka:
     bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
