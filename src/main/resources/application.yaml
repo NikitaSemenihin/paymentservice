@@ -1,3 +1,27 @@
+server:
+  port: 8084
+
 spring:
   application:
     name: Payment Service
+
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/paymentservice
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+app:
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+  security:
+    admin-role: ADMIN
+  kafka:
+    payment-created-topic: payment.created
+  random-number:
+    base-url: https://www.randomnumberapi.com
+    min: 0
+    max: 100

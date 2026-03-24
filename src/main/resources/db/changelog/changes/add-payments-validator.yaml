@@ -1,0 +1,46 @@
+databaseChangeLog:
+  - changeSet:
+      id: 002-add-payments-validator
+      author: Nikita Semenihin
+      changes:
+        - runCommand:
+            command: |
+              {
+                "collMod": "payments",
+                "validator": {
+                  "$jsonSchema": {
+                    "bsonType": "object",
+                    "required": [
+                      "order_id",
+                      "user_id",
+                      "status",
+                      "timestamp",
+                      "payment_amount"
+                    ],
+                    "properties": {
+                      "_id": {
+                        "bsonType": "objectId"
+                      },
+                      "order_id": {
+                        "bsonType": "long"
+                      },
+                      "user_id": {
+                        "bsonType": "long"
+                      },
+                      "status": {
+                        "bsonType": "string",
+                        "enum": ["SUCCESS", "FAILED"]
+                      },
+                      "timestamp": {
+                        "bsonType": "date"
+                      },
+                      "payment_amount": {
+                        "bsonType": "decimal"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "validationLevel": "strict",
+                "validationAction": "error"
+              }

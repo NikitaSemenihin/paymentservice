@@ -1,0 +1,7 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-create-payments-collection
+      author: Nikita Semenihin
+      changes:
+        - createCollection:
+            collectionName: payments
