@@ -69,7 +69,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set lowercase image repo
-        run: echo "IMAGE_REPO=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/orderservice" >> $GITHUB_ENV
+        run: echo "IMAGE_REPO=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/paymentservice" >> $GITHUB_ENV
 
       - name: Build Docker image (PR)
         if: github.event_name == 'pull_request'
