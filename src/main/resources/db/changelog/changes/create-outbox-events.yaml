@@ -1,0 +1,51 @@
+databaseChangeLog:
+  - changeSet:
+      id: 008-create-outbox-events-collection
+      author: Nikita Semenihin
+      changes:
+        - createCollection:
+            collectionName: outbox_events
+  - changeSet:
+      id: 009-add-outbox-events-validator
+      author: Nikita Semenihin
+      changes:
+        - runCommand:
+            command: |
+              {
+                "collMod": "outbox_events",
+                "validator": {
+                  "$jsonSchema": {
+                    "bsonType": "object",
+                    "required": [
+                      "aggregate_type",
+                      "aggregate_id",
+                      "event_type",
+                      "payload",
+                      "status",
+                      "attempt_count",
+                      "created_at",
+                      "next_retry_at"
+                    ],
+                    "properties": {
+                      "_id": { "bsonType": "objectId" },
+                      "aggregate_type": { "bsonType": "string" },
+                      "aggregate_id": { "bsonType": "string" },
+                      "event_type": { "bsonType": "string" },
+                      "payload": { "bsonType": "string" },
+                      "status": {
+                        "bsonType": "string",
+                        "enum": ["NEW", "PROCESSING", "PUBLISHED", "FAILED"]
+                      },
+                      "attempt_count": { "bsonType": "int" },
+                      "created_at": { "bsonType": "date" },
+                      "published_at": { "bsonType": "date" },
+                      "last_error": { "bsonType": "string" },
+                      "next_retry_at": { "bsonType": "date" },
+                      "locked_at": { "bsonType": "date" }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "validationLevel": "strict",
+                "validationAction": "error"
+              }

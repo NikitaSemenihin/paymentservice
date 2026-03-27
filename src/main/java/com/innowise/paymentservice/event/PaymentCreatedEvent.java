@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 public record PaymentCreatedEvent(
+        String eventId,
         String id,
         Long orderId,
         Long userId,

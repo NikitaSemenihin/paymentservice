@@ -1,0 +1,21 @@
+databaseChangeLog:
+  - changeSet:
+      id: 010-create-outbox-status-next-retry-index
+      author: Nikita Semenihin
+      changes:
+        - createIndex:
+            collectionName: outbox_events
+            keys: |
+              { status: 1, next_retry_at: 1, created_at: 1 }
+            options: |
+              { name: "idx_outbox_status_next_retry_created_at" }
+  - changeSet:
+      id: 011-create-outbox-aggregate-id-index
+      author: Nikita Semenihin
+      changes:
+        - createIndex:
+            collectionName: outbox_events
+            keys: |
+              { aggregate_id: 1 }
+            options: |
+              { name: "idx_outbox_aggregate_id" }

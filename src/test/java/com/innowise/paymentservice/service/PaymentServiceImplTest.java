@@ -1,8 +1,10 @@
 package com.innowise.paymentservice.service;
 
 import com.innowise.paymentservice.client.RandomNumberClient;
-import com.innowise.paymentservice.event.PaymentEventPublisher;
+import com.innowise.paymentservice.config.RequestAuthContext;
+import com.innowise.paymentservice.config.RequesterRole;
 import com.innowise.paymentservice.exception.BadRequestException;
+import com.innowise.paymentservice.exception.ForbiddenException;
 import com.innowise.paymentservice.exception.PaymentNotFoundException;
 import com.innowise.paymentservice.mapper.PaymentMapper;
 import com.innowise.paymentservice.model.dto.PaymentRequestDto;
@@ -10,6 +12,9 @@ import com.innowise.paymentservice.model.dto.PaymentResponseDto;
 import com.innowise.paymentservice.model.dto.TotalAmountResponseDto;
 import com.innowise.paymentservice.model.entity.Payment;
 import com.innowise.paymentservice.model.entity.PaymentStatus;
+import com.innowise.paymentservice.outbox.OutboxEvent;
+import com.innowise.paymentservice.outbox.OutboxEventFactory;
+import com.innowise.paymentservice.outbox.OutboxEventRepository;
 import com.innowise.paymentservice.repository.PaymentRepository;
 import com.innowise.paymentservice.service.impl.PaymentServiceImpl;
 import org.bson.types.ObjectId;
@@ -42,7 +47,10 @@ class PaymentServiceImplTest {
     private RandomNumberClient randomNumberClient;
 
     @Mock
-    private PaymentEventPublisher paymentEventPublisher;
+    private OutboxEventRepository outboxEventRepository;
+
+    @Mock
+    private OutboxEventFactory outboxEventFactory;
 
     @InjectMocks
     private PaymentServiceImpl paymentService;
@@ -67,11 +75,13 @@ class PaymentServiceImplTest {
                 savedPayment.getTimestamp(),
                 BigDecimal.valueOf(15.25)
         );
+        OutboxEvent outboxEvent = new OutboxEvent();
 
         when(paymentMapper.toEntity(request)).thenReturn(payment);
         when(randomNumberClient.getRandomNumber()).thenReturn(8);
         when(paymentRepository.save(payment)).thenReturn(savedPayment);
         when(paymentMapper.toResponse(savedPayment)).thenReturn(response);
+        when(outboxEventFactory.paymentCreated(response)).thenReturn(outboxEvent);
 
         PaymentResponseDto actual = paymentService.create(request);
 
@@ -79,38 +89,79 @@ class PaymentServiceImplTest {
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.SUCCESS);
         assertThat(payment.getTimestamp()).isNotNull();
         verify(paymentRepository).save(payment);
-        verify(paymentEventPublisher).publishPaymentCreated(response);
+        verify(outboxEventFactory).paymentCreated(response);
+        verify(outboxEventRepository).save(outboxEvent);
     }
 
     @Test
     void createShouldSetFailedStatusForOddRandomValue() {
         PaymentRequestDto request = new PaymentRequestDto(10L, 20L, BigDecimal.valueOf(15.25));
         Payment payment = new Payment();
+        OutboxEvent outboxEvent = new OutboxEvent();
 
         when(paymentMapper.toEntity(request)).thenReturn(payment);
         when(randomNumberClient.getRandomNumber()).thenReturn(7);
         when(paymentRepository.save(payment)).thenReturn(payment);
-        when(paymentMapper.toResponse(payment)).thenReturn(new PaymentResponseDto(
+        PaymentResponseDto response = new PaymentResponseDto(
                 null,
                 10L,
                 20L,
                 PaymentStatus.FAILED,
                 Instant.now(),
                 BigDecimal.valueOf(15.25)
-        ));
+        );
+        when(paymentMapper.toResponse(payment)).thenReturn(response);
+        when(outboxEventFactory.paymentCreated(response)).thenReturn(outboxEvent);
 
         PaymentResponseDto actual = paymentService.create(request);
 
         assertThat(actual.status()).isEqualTo(PaymentStatus.FAILED);
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.FAILED);
-        verify(paymentEventPublisher).publishPaymentCreated(actual);
+        verify(outboxEventRepository).save(outboxEvent);
     }
 
     @Test
-    void getPaymentsShouldFailWhenFilterCountIsInvalid() {
-        assertThatThrownBy(() -> paymentService.getPayments(1L, 2L, null))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("Exactly one filter must be provided");
+    void getPaymentsShouldReturnAllPaymentsForAdminFlowWithoutFilters() {
+        Payment firstPayment = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d930"),
+                10L,
+                20L,
+                PaymentStatus.SUCCESS,
+                Instant.now(),
+                BigDecimal.ONE
+        );
+        Payment secondPayment = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d931"),
+                11L,
+                21L,
+                PaymentStatus.FAILED,
+                Instant.now(),
+                BigDecimal.TEN
+        );
+        PaymentResponseDto firstResponse = new PaymentResponseDto(
+                "64f0c3d5a3a8435b2dd5d930",
+                10L,
+                20L,
+                PaymentStatus.SUCCESS,
+                firstPayment.getTimestamp(),
+                BigDecimal.ONE
+        );
+        PaymentResponseDto secondResponse = new PaymentResponseDto(
+                "64f0c3d5a3a8435b2dd5d931",
+                11L,
+                21L,
+                PaymentStatus.FAILED,
+                secondPayment.getTimestamp(),
+                BigDecimal.TEN
+        );
+
+        when(paymentRepository.findAll()).thenReturn(List.of(firstPayment, secondPayment));
+        when(paymentMapper.toResponse(firstPayment)).thenReturn(firstResponse);
+        when(paymentMapper.toResponse(secondPayment)).thenReturn(secondResponse);
+
+        List<PaymentResponseDto> actual = paymentService.getPayments(null, null, null);
+
+        assertThat(actual).containsExactly(firstResponse, secondResponse);
     }
 
     @Test
@@ -195,6 +246,195 @@ class PaymentServiceImplTest {
     }
 
     @Test
+    void getPaymentsShouldReturnOnlyCurrentUsersPaymentsForUserContext() {
+        Payment matchingByStatus = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d921"),
+                15L,
+                20L,
+                PaymentStatus.SUCCESS,
+                Instant.now(),
+                BigDecimal.TEN
+        );
+        Payment filteredOutByStatus = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d922"),
+                16L,
+                20L,
+                PaymentStatus.FAILED,
+                Instant.now(),
+                BigDecimal.ONE
+        );
+        PaymentResponseDto response = new PaymentResponseDto(
+                "64f0c3d5a3a8435b2dd5d921",
+                15L,
+                20L,
+                PaymentStatus.SUCCESS,
+                matchingByStatus.getTimestamp(),
+                BigDecimal.TEN
+        );
+
+        when(paymentRepository.findAllByUserId(20L)).thenReturn(List.of(matchingByStatus, filteredOutByStatus));
+        when(paymentMapper.toResponse(matchingByStatus)).thenReturn(response);
+
+        List<PaymentResponseDto> actual = paymentService.getPayments(
+                null,
+                null,
+                PaymentStatus.SUCCESS,
+                new RequestAuthContext(20L, RequesterRole.USER, null)
+        );
+
+        assertThat(actual).containsExactly(response);
+    }
+
+    @Test
+    void getPaymentsShouldReturnAllCurrentUsersPaymentsWithoutExtraFilters() {
+        Payment firstPayment = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d924"),
+                15L,
+                20L,
+                PaymentStatus.SUCCESS,
+                Instant.now(),
+                BigDecimal.TEN
+        );
+        Payment secondPayment = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d925"),
+                16L,
+                20L,
+                PaymentStatus.FAILED,
+                Instant.now(),
+                BigDecimal.ONE
+        );
+        PaymentResponseDto firstResponse = new PaymentResponseDto(
+                "64f0c3d5a3a8435b2dd5d924",
+                15L,
+                20L,
+                PaymentStatus.SUCCESS,
+                firstPayment.getTimestamp(),
+                BigDecimal.TEN
+        );
+        PaymentResponseDto secondResponse = new PaymentResponseDto(
+                "64f0c3d5a3a8435b2dd5d925",
+                16L,
+                20L,
+                PaymentStatus.FAILED,
+                secondPayment.getTimestamp(),
+                BigDecimal.ONE
+        );
+
+        when(paymentRepository.findAllByUserId(20L)).thenReturn(List.of(firstPayment, secondPayment));
+        when(paymentMapper.toResponse(firstPayment)).thenReturn(firstResponse);
+        when(paymentMapper.toResponse(secondPayment)).thenReturn(secondResponse);
+
+        List<PaymentResponseDto> actual = paymentService.getPayments(
+                null,
+                null,
+                null,
+                new RequestAuthContext(20L, RequesterRole.USER, null)
+        );
+
+        assertThat(actual).containsExactly(firstResponse, secondResponse);
+    }
+
+    @Test
+    void getPaymentsShouldRejectAccessToAnotherUsersPaymentsForUserContext() {
+        assertThatThrownBy(() -> paymentService.getPayments(
+                99L,
+                null,
+                null,
+                new RequestAuthContext(20L, RequesterRole.USER, null)
+        ))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("own payments");
+    }
+
+    @Test
+    void getPaymentsShouldApplyCombinedFiltersForAdminContext() {
+        Payment payment = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d923"),
+                15L,
+                20L,
+                PaymentStatus.SUCCESS,
+                Instant.now(),
+                BigDecimal.TEN
+        );
+        Payment differentOrder = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d926"),
+                16L,
+                20L,
+                PaymentStatus.SUCCESS,
+                Instant.now(),
+                BigDecimal.ONE
+        );
+        Payment differentStatus = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d927"),
+                15L,
+                20L,
+                PaymentStatus.FAILED,
+                Instant.now(),
+                BigDecimal.ONE
+        );
+        Payment differentUser = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d928"),
+                15L,
+                21L,
+                PaymentStatus.SUCCESS,
+                Instant.now(),
+                BigDecimal.ONE
+        );
+        PaymentResponseDto response = new PaymentResponseDto(
+                "64f0c3d5a3a8435b2dd5d923",
+                15L,
+                20L,
+                PaymentStatus.SUCCESS,
+                payment.getTimestamp(),
+                BigDecimal.TEN
+        );
+
+        when(paymentRepository.findAll()).thenReturn(List.of(payment, differentOrder, differentStatus, differentUser));
+        when(paymentMapper.toResponse(payment)).thenReturn(response);
+
+        List<PaymentResponseDto> actual = paymentService.getPayments(
+                20L,
+                15L,
+                PaymentStatus.SUCCESS,
+                new RequestAuthContext(1L, RequesterRole.ADMIN, null)
+        );
+
+        assertThat(actual).containsExactly(response);
+    }
+
+    @Test
+    void getPaymentsShouldAllowMatchingUserIdForUserContext() {
+        Payment payment = new Payment(
+                new ObjectId("64f0c3d5a3a8435b2dd5d929"),
+                15L,
+                20L,
+                PaymentStatus.SUCCESS,
+                Instant.now(),
+                BigDecimal.TEN
+        );
+        PaymentResponseDto response = new PaymentResponseDto(
+                "64f0c3d5a3a8435b2dd5d929",
+                15L,
+                20L,
+                PaymentStatus.SUCCESS,
+                payment.getTimestamp(),
+                BigDecimal.TEN
+        );
+
+        when(paymentRepository.findAllByUserId(20L)).thenReturn(List.of(payment));
+        when(paymentMapper.toResponse(payment)).thenReturn(response);
+
+        List<PaymentResponseDto> actual = paymentService.getPayments(
+                20L,
+                null,
+                null,
+                new RequestAuthContext(20L, RequesterRole.USER, null)
+        );
+
+        assertThat(actual).containsExactly(response);
+    }
+
+    @Test
     void getByIdShouldReturnMappedResponseForExistingPayment() {
         String paymentId = "64f0c3d5a3a8435b2dd5d914";
         Payment payment = new Payment(
@@ -220,6 +460,81 @@ class PaymentServiceImplTest {
         PaymentResponseDto actual = paymentService.getById(paymentId);
 
         assertThat(actual).isEqualTo(response);
+    }
+
+    @Test
+    void getByIdShouldReturnPaymentForOwner() {
+        String paymentId = "64f0c3d5a3a8435b2dd5d918";
+        Payment payment = new Payment(
+                new ObjectId(paymentId),
+                10L,
+                20L,
+                PaymentStatus.SUCCESS,
+                Instant.now(),
+                BigDecimal.valueOf(22.40)
+        );
+        PaymentResponseDto response = new PaymentResponseDto(
+                paymentId,
+                10L,
+                20L,
+                PaymentStatus.SUCCESS,
+                payment.getTimestamp(),
+                BigDecimal.valueOf(22.40)
+        );
+
+        when(paymentRepository.findById(new ObjectId(paymentId))).thenReturn(Optional.of(payment));
+        when(paymentMapper.toResponse(payment)).thenReturn(response);
+
+        PaymentResponseDto actual = paymentService.getById(paymentId, new RequestAuthContext(20L, RequesterRole.USER, null));
+
+        assertThat(actual).isEqualTo(response);
+    }
+
+    @Test
+    void getByIdShouldReturnPaymentForAdmin() {
+        String paymentId = "64f0c3d5a3a8435b2dd5d919";
+        Payment payment = new Payment(
+                new ObjectId(paymentId),
+                10L,
+                20L,
+                PaymentStatus.SUCCESS,
+                Instant.now(),
+                BigDecimal.valueOf(22.40)
+        );
+        PaymentResponseDto response = new PaymentResponseDto(
+                paymentId,
+                10L,
+                20L,
+                PaymentStatus.SUCCESS,
+                payment.getTimestamp(),
+                BigDecimal.valueOf(22.40)
+        );
+
+        when(paymentRepository.findById(new ObjectId(paymentId))).thenReturn(Optional.of(payment));
+        when(paymentMapper.toResponse(payment)).thenReturn(response);
+
+        PaymentResponseDto actual = paymentService.getById(paymentId, new RequestAuthContext(999L, RequesterRole.ADMIN, null));
+
+        assertThat(actual).isEqualTo(response);
+    }
+
+    @Test
+    void getByIdShouldRejectAccessToOtherUsersPayment() {
+        String paymentId = "64f0c3d5a3a8435b2dd5d920";
+        Payment payment = new Payment(
+                new ObjectId(paymentId),
+                10L,
+                20L,
+                PaymentStatus.SUCCESS,
+                Instant.now(),
+                BigDecimal.valueOf(22.40)
+        );
+
+        when(paymentRepository.findById(new ObjectId(paymentId))).thenReturn(Optional.of(payment));
+
+        assertThatThrownBy(() -> paymentService.getById(paymentId, new RequestAuthContext(21L, RequesterRole.USER, null)))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("do not have access");
     }
 
     @Test

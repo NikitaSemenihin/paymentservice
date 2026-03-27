@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innowise.paymentservice.config.RequestAuthContext;
 import com.innowise.paymentservice.config.RequesterRole;
 import com.innowise.paymentservice.exception.GlobalExceptionHandler;
+import com.innowise.paymentservice.model.dto.CreatePaymentRequestDto;
 import com.innowise.paymentservice.model.dto.PaymentRequestDto;
 import com.innowise.paymentservice.model.dto.PaymentResponseDto;
 import com.innowise.paymentservice.model.dto.TotalAmountResponseDto;
@@ -24,11 +25,14 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -49,7 +53,7 @@ class PaymentControllerTest {
 
     @Test
     void createShouldReturnCreatedPayment() throws Exception {
-        PaymentRequestDto request = new PaymentRequestDto(1L, 2L, BigDecimal.valueOf(19.99));
+        CreatePaymentRequestDto request = new CreatePaymentRequestDto(1L, BigDecimal.valueOf(19.99));
         PaymentResponseDto response = new PaymentResponseDto(
                 "64f0c3d5a3a8435b2dd5d911",
                 1L,
@@ -59,6 +63,7 @@ class PaymentControllerTest {
                 BigDecimal.valueOf(19.99)
         );
 
+        when(accessPolicyService.requireContext(any())).thenReturn(new RequestAuthContext(2L, RequesterRole.USER, null));
         when(paymentService.create(any(PaymentRequestDto.class))).thenReturn(response);
 
         mockMvc.perform(post("/api/payments")
@@ -69,11 +74,14 @@ class PaymentControllerTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("SUCCESS"))
                 .andExpect(jsonPath("$.orderId").value(1));
+
+        verify(accessPolicyService).requireUserOrAdmin(any());
+        verify(paymentService).create(eq(new PaymentRequestDto(1L, 2L, BigDecimal.valueOf(19.99))));
     }
 
     @Test
     void createShouldValidateRequestBody() throws Exception {
-        PaymentRequestDto request = new PaymentRequestDto(null, 2L, BigDecimal.valueOf(19.99));
+        CreatePaymentRequestDto request = new CreatePaymentRequestDto(null, BigDecimal.valueOf(19.99));
 
         mockMvc.perform(post("/api/payments")
                         .header("X-User-Id", "1")
@@ -94,8 +102,10 @@ class PaymentControllerTest {
                 Instant.parse("2026-03-18T12:00:00Z"),
                 BigDecimal.valueOf(19.99)
         );
+        RequestAuthContext context = new RequestAuthContext(1L, RequesterRole.USER, null);
 
-        when(paymentService.getPayments(2L, null, null)).thenReturn(List.of(response));
+        when(accessPolicyService.requireContext(any())).thenReturn(context);
+        when(paymentService.getPayments(2L, null, null, context)).thenReturn(List.of(response));
 
         mockMvc.perform(get("/api/payments")
                         .header("X-User-Id", "1")
@@ -103,6 +113,32 @@ class PaymentControllerTest {
                         .param("userId", "2"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].userId").value(2));
+
+        verify(accessPolicyService).requireUserOrAdmin(any());
+    }
+
+    @Test
+    void getPaymentByIdShouldUseAuthContext() throws Exception {
+        PaymentResponseDto response = new PaymentResponseDto(
+                "64f0c3d5a3a8435b2dd5d911",
+                1L,
+                2L,
+                PaymentStatus.SUCCESS,
+                Instant.parse("2026-03-18T12:00:00Z"),
+                BigDecimal.valueOf(19.99)
+        );
+        RequestAuthContext context = new RequestAuthContext(2L, RequesterRole.USER, null);
+
+        when(accessPolicyService.requireContext(any())).thenReturn(context);
+        when(paymentService.getById("64f0c3d5a3a8435b2dd5d911", context)).thenReturn(response);
+
+        mockMvc.perform(get("/api/payments/64f0c3d5a3a8435b2dd5d911")
+                        .header("X-User-Id", "2")
+                        .header("X-User-Role", "USER"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.userId").value(2));
+
+        verify(accessPolicyService).requireUserOrAdmin(any());
     }
 
     @Test
@@ -128,11 +164,47 @@ class PaymentControllerTest {
 
     @Test
     void deleteShouldReturnNoContent() throws Exception {
+        when(accessPolicyService.requireContext(any())).thenReturn(new RequestAuthContext(1L, RequesterRole.ADMIN, null));
+
         mockMvc.perform(delete("/api/payments/64f0c3d5a3a8435b2dd5d911")
                         .header("X-User-Id", "1")
-                        .header("X-User-Role", "USER"))
+                        .header("X-User-Role", "ADMIN"))
                 .andExpect(status().isNoContent());
 
+        verify(accessPolicyService).requireAdmin(any());
         verify(paymentService).delete(eq("64f0c3d5a3a8435b2dd5d911"));
+    }
+
+    @Test
+    void updateShouldBeForbiddenForNonAdmin() throws Exception {
+        PaymentRequestDto request = new PaymentRequestDto(1L, 2L, BigDecimal.valueOf(19.99));
+        doThrow(new com.innowise.paymentservice.exception.ForbiddenException("Admin role required"))
+                .when(accessPolicyService).requireAdmin(any());
+
+        mockMvc.perform(put("/api/payments/64f0c3d5a3a8435b2dd5d911")
+                        .header("X-User-Id", "2")
+                        .header("X-User-Role", "USER")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("Admin role required"));
+
+        verify(accessPolicyService).requireAdmin(any());
+        verifyNoInteractions(paymentService);
+    }
+
+    @Test
+    void deleteShouldBeForbiddenForNonAdmin() throws Exception {
+        doThrow(new com.innowise.paymentservice.exception.ForbiddenException("Admin role required"))
+                .when(accessPolicyService).requireAdmin(any());
+
+        mockMvc.perform(delete("/api/payments/64f0c3d5a3a8435b2dd5d911")
+                        .header("X-User-Id", "2")
+                        .header("X-User-Role", "USER"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("Admin role required"));
+
+        verify(accessPolicyService).requireAdmin(any());
+        verifyNoInteractions(paymentService);
     }
 }

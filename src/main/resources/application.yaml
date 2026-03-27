@@ -7,12 +7,21 @@ spring:
 
   data:
     mongodb:
-      uri: ${SPRING_DATA_MONGODB_URI:mongodb://localhost:27017/paymentservice}
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://localhost:27017/paymentservice?replicaSet=rs0}
   kafka:
     bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
+      acks: all
+      retries: 10
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 30000
+        request.timeout.ms: 10000
+
+
 
 app:
   liquibase:
@@ -25,3 +34,17 @@ app:
     base-url: https://www.randomnumberapi.com
     min: 0
     max: 100
+  outbox:
+    fixed-delay-ms: 5000
+    max-attempts: 10
+    initial-backoff-ms: 5000
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health

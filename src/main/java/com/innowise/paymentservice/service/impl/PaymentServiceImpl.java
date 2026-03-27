@@ -1,8 +1,9 @@
 package com.innowise.paymentservice.service.impl;
 
 import com.innowise.paymentservice.client.RandomNumberClient;
-import com.innowise.paymentservice.event.PaymentEventPublisher;
+import com.innowise.paymentservice.config.RequestAuthContext;
 import com.innowise.paymentservice.exception.BadRequestException;
+import com.innowise.paymentservice.exception.ForbiddenException;
 import com.innowise.paymentservice.exception.PaymentNotFoundException;
 import com.innowise.paymentservice.mapper.PaymentMapper;
 import com.innowise.paymentservice.model.dto.PaymentRequestDto;
@@ -10,10 +11,13 @@ import com.innowise.paymentservice.model.dto.PaymentResponseDto;
 import com.innowise.paymentservice.model.dto.TotalAmountResponseDto;
 import com.innowise.paymentservice.model.entity.Payment;
 import com.innowise.paymentservice.model.entity.PaymentStatus;
+import com.innowise.paymentservice.outbox.OutboxEventFactory;
+import com.innowise.paymentservice.outbox.OutboxEventRepository;
 import com.innowise.paymentservice.repository.PaymentRepository;
 import com.innowise.paymentservice.service.PaymentService;
 import org.bson.types.ObjectId;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -23,27 +27,32 @@ public class PaymentServiceImpl implements PaymentService {
     private final PaymentRepository paymentRepository;
     private final PaymentMapper paymentMapper;
     private final RandomNumberClient randomNumberClient;
-    private final PaymentEventPublisher paymentEventPublisher;
+    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxEventFactory outboxEventFactory;
 
     public PaymentServiceImpl(
             PaymentRepository paymentRepository,
             PaymentMapper paymentMapper,
             RandomNumberClient randomNumberClient,
-            PaymentEventPublisher paymentEventPublisher
+            OutboxEventRepository outboxEventRepository,
+            OutboxEventFactory outboxEventFactory
     ) {
         this.paymentRepository = paymentRepository;
         this.paymentMapper = paymentMapper;
         this.randomNumberClient = randomNumberClient;
-        this.paymentEventPublisher = paymentEventPublisher;
+        this.outboxEventRepository = outboxEventRepository;
+        this.outboxEventFactory = outboxEventFactory;
     }
 
     @Override
+    @Transactional
     public PaymentResponseDto create(PaymentRequestDto requestDto) {
         Payment payment = paymentMapper.toEntity(requestDto);
         payment.setTimestamp(Instant.now());
         payment.setStatus(resolvePaymentStatus());
-        PaymentResponseDto response = paymentMapper.toResponse(paymentRepository.save(payment));
-        paymentEventPublisher.publishPaymentCreated(response);
+        Payment savedPayment = paymentRepository.save(payment);
+        PaymentResponseDto response = paymentMapper.toResponse(savedPayment);
+        outboxEventRepository.save(outboxEventFactory.paymentCreated(response));
         return response;
     }
 
@@ -53,25 +62,37 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     @Override
+    public PaymentResponseDto getById(String id, RequestAuthContext context) {
+        Payment payment = findPaymentById(id);
+        ensureCanAccessPayment(payment, context);
+        return paymentMapper.toResponse(payment);
+    }
+
+    @Override
     public List<PaymentResponseDto> getPayments(Long userId, Long orderId, PaymentStatus status) {
-        long filtersCount = countPresentFilters(userId, orderId, status);
-        if (filtersCount != 1) {
-            throw new BadRequestException("Exactly one filter must be provided: userId, orderId or status");
+        return filterPayments(resolveAdminPayments(userId, orderId, status), userId, orderId, status);
+    }
+
+    @Override
+    public List<PaymentResponseDto> getPayments(Long userId, Long orderId, PaymentStatus status, RequestAuthContext context) {
+        if (context.isAdmin()) {
+            return getPayments(userId, orderId, status);
         }
 
-        List<Payment> payments;
-
-        if (userId != null) {
-            payments = paymentRepository.findAllByUserId(userId);
-        } else if (orderId != null) {
-            payments = paymentRepository.findAllByOrderId(orderId);
-        } else {
-            payments = paymentRepository.findAllByStatus(status);
+        if (context.userId() == null) {
+            throw new ForbiddenException("Missing requester user id");
         }
 
-        return payments.stream()
-                .map(paymentMapper::toResponse)
-                .toList();
+        if (userId != null && !context.userId().equals(userId)) {
+            throw new ForbiddenException("You can only access your own payments");
+        }
+
+        return filterPayments(
+                paymentRepository.findAllByUserId(context.userId()),
+                context.userId(),
+                orderId,
+                status
+        );
     }
 
     @Override
@@ -128,6 +149,16 @@ public class PaymentServiceImpl implements PaymentService {
                 .orElseThrow(() -> new PaymentNotFoundException(id));
     }
 
+    private void ensureCanAccessPayment(Payment payment, RequestAuthContext context) {
+        if (context.isAdmin()) {
+            return;
+        }
+        if (context.userId() != null && context.userId().equals(payment.getUserId())) {
+            return;
+        }
+        throw new ForbiddenException("You do not have access to this payment");
+    }
+
     private void validateDateRange(Instant from, Instant to) {
         if (from == null || to == null) {
             throw new BadRequestException("Both from and to dates must be provided");
@@ -137,17 +168,30 @@ public class PaymentServiceImpl implements PaymentService {
         }
     }
 
-    private long countPresentFilters(Long userId, Long orderId, PaymentStatus status) {
-        long count = 0;
-        if (userId != null) {
-            count++;
+    private List<Payment> resolveAdminPayments(Long userId, Long orderId, PaymentStatus status) {
+        if (userId != null && orderId == null && status == null) {
+            return paymentRepository.findAllByUserId(userId);
         }
-        if (orderId != null) {
-            count++;
+        if (userId == null && orderId != null && status == null) {
+            return paymentRepository.findAllByOrderId(orderId);
         }
-        if (status != null) {
-            count++;
+        if (userId == null && orderId == null && status != null) {
+            return paymentRepository.findAllByStatus(status);
         }
-        return count;
+        return paymentRepository.findAll();
+    }
+
+    private List<PaymentResponseDto> filterPayments(
+            List<Payment> payments,
+            Long userId,
+            Long orderId,
+            PaymentStatus status
+    ) {
+        return payments.stream()
+                .filter(payment -> userId == null || userId.equals(payment.getUserId()))
+                .filter(payment -> orderId == null || orderId.equals(payment.getOrderId()))
+                .filter(payment -> status == null || status == payment.getStatus())
+                .map(paymentMapper::toResponse)
+                .toList();
     }
 }

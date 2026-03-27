@@ -5,3 +5,7 @@ databaseChangeLog:
       file: db/changelog/changes/add-payments-validator.yaml
   - include:
       file: db/changelog/changes/create-payments-indexes.yaml
+  - include:
+      file: db/changelog/changes/create-outbox-events.yaml
+  - include:
+      file: db/changelog/changes/create-outbox-events-indexes.yaml

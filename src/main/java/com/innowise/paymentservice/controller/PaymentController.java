@@ -1,5 +1,7 @@
 package com.innowise.paymentservice.controller;
 
+import com.innowise.paymentservice.config.RequestAuthContext;
+import com.innowise.paymentservice.model.dto.CreatePaymentRequestDto;
 import com.innowise.paymentservice.model.dto.PaymentRequestDto;
 import com.innowise.paymentservice.model.dto.PaymentResponseDto;
 import com.innowise.paymentservice.model.dto.TotalAmountResponseDto;
@@ -17,7 +19,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -38,36 +39,52 @@ public class PaymentController {
     }
 
     @PostMapping
-    public ResponseEntity<PaymentResponseDto> createPayment(@Valid @RequestBody PaymentRequestDto request) {
+    public ResponseEntity<PaymentResponseDto> createPayment(
+            HttpServletRequest request,
+            @Valid @RequestBody CreatePaymentRequestDto payload
+    ) {
+        accessPolicyService.requireUserOrAdmin(request);
+        RequestAuthContext context = accessPolicyService.requireContext(request);
+
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(paymentService.create(request));
+                .body(paymentService.create(new PaymentRequestDto(
+                        payload.orderId(),
+                        context.userId(),
+                        payload.paymentAmount()
+                )));
     }
 
     @GetMapping("/{id}")
-    public PaymentResponseDto getPaymentById(@PathVariable String id) {
-        return paymentService.getById(id);
+    public PaymentResponseDto getPaymentById(HttpServletRequest request, @PathVariable String id) {
+        accessPolicyService.requireUserOrAdmin(request);
+        return paymentService.getById(id, accessPolicyService.requireContext(request));
     }
 
     @GetMapping
     public List<PaymentResponseDto> getPayments(
+            HttpServletRequest request,
             @RequestParam(required = false) Long userId,
             @RequestParam(required = false) Long orderId,
             @RequestParam(required = false) PaymentStatus status
     ) {
-        return paymentService.getPayments(userId, orderId, status);
+        accessPolicyService.requireUserOrAdmin(request);
+        return paymentService.getPayments(userId, orderId, status, accessPolicyService.requireContext(request));
     }
 
     @PutMapping("/{id}")
     public PaymentResponseDto updatePayment(
+            HttpServletRequest request,
             @PathVariable String id,
-            @Valid @RequestBody PaymentRequestDto request
+            @Valid @RequestBody PaymentRequestDto payload
     ) {
-        return paymentService.update(id, request);
+        accessPolicyService.requireAdmin(request);
+        return paymentService.update(id, payload);
     }
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void deletePayment(@PathVariable String id) {
+    public void deletePayment(HttpServletRequest request, @PathVariable String id) {
+        accessPolicyService.requireAdmin(request);
         paymentService.delete(id);
     }
 

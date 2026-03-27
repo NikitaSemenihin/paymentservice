@@ -4,6 +4,9 @@ import com.innowise.paymentservice.exception.ExternalServiceException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 @Component
 public class RandomNumberApiClient implements RandomNumberClient {
@@ -38,8 +41,17 @@ public class RandomNumberApiClient implements RandomNumberClient {
                 throw new ExternalServiceException("Random number API returned an empty response");
             }
             return response[0];
+        } catch (RestClientResponseException exception) {
+            throw new ExternalServiceException(
+                    "Random number API returned HTTP " + exception.getStatusCode().value(),
+                    exception
+            );
+        } catch (ResourceAccessException exception) {
+            throw new ExternalServiceException("Random number API is unavailable", exception);
+        } catch (RestClientException exception) {
+            throw new ExternalServiceException("Random number API request failed", exception);
         } catch (Exception exception) {
-            throw new ExternalServiceException("Failed to fetch random number", exception);
+            throw new ExternalServiceException("Unexpected error while fetching random number", exception);
         }
     }
 }
