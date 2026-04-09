@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "payment-created-event.schema.json",
+  "title": "PaymentCreatedEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "id",
+    "orderId",
+    "userId",
+    "status",
+    "timestamp",
+    "paymentAmount"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique event identifier for idempotent processing"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{24}$",
+      "description": "Payment identifier encoded as Mongo ObjectId hex"
+    },
+    "orderId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "userId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "SUCCESS",
+        "FAILED"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "paymentAmount": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  }
+}

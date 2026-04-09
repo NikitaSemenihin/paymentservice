@@ -1,0 +1,51 @@
+databaseChangeLog:
+  - changeSet:
+      id: 003-create-payments-order-id-index
+      author: Nikita Semenihin
+      changes:
+        - createIndex:
+            collectionName: payments
+            keys: |
+              { order_id: 1 }
+            options: |
+              { name: "idx_payments_order_id" }
+  - changeSet:
+      id: 004-create-payments-user-id-index
+      author: Nikita Semenihin
+      changes:
+        - createIndex:
+            collectionName: payments
+            keys: |
+              { user_id: 1 }
+            options: |
+              { name: "idx_payments_user_id" }
+  - changeSet:
+      id: 005-create-payments-timestamp-index
+      author: Nikita Semenihin
+      changes:
+        - createIndex:
+            collectionName: payments
+            keys: |
+              { timestamp: -1 }
+            options: |
+              { name: "idx_payments_timestamp" }
+  - changeSet:
+      id: 006-create-payments-status-index
+      author: Nikita Semenihin
+      changes:
+        - createIndex:
+            collectionName: payments
+            keys: |
+              { status: 1 }
+            options: |
+              { name: "idx_payments_status" }
+  - changeSet:
+      id: 007-create-payments-user-id-timestamp-index
+      author: Nikita Semenihin
+      changes:
+        - createIndex:
+            collectionName: payments
+            keys: |
+              { user_id: 1, timestamp: -1 }
+            options: |
+              { name: "idx_payments_user_id_timestamp" }
